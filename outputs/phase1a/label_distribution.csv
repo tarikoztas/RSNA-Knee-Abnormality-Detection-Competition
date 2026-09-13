@@ -1,0 +1,13 @@
+etiket,n_poz,n_neg,prevalans,AUC_olculebilir
+MCL,9,49,0.155,zayif
+Lateral OA,11,47,0.19,zayif
+Baker's,12,46,0.207,zayif
+Medial OA,15,43,0.259,evet
+Fracture,18,40,0.31,evet
+Contusion,19,39,0.328,evet
+PF OA,21,37,0.362,evet
+Lateral Meniscus,23,35,0.397,evet
+ACL,24,34,0.414,evet
+Medial Meniscus,26,32,0.448,evet
+Synovitis,27,31,0.466,evet
+Effusion,35,23,0.603,evet

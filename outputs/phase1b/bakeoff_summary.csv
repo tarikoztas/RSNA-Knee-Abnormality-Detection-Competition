@@ -1,0 +1,6 @@
+model,durum,parse_ok,s_rapor,tam_kosu_saat,F1_mask,AUC_mask,kapsam,en_zayif,F1_absent,AUC_absent,F1_half,AUC_half
+Qwen2.5-7B-Instruct,HATA: RuntimeError,,,,,,,,,,,
+Qwen3-8B,HATA: RuntimeError,,,,,,,,,,,
+Qwen2.5-14B-Instruct-AWQ,ok,0.898,15.24,18.66,0.7774,0.8351,0.737,MCL,0.69,0.769,0.6573,0.8148
+Qwen3-14B-AWQ,ok,0.0,17.477,21.39,,,0.0,,0.0,0.5,0.5048,0.5
+Qwen2.5-32B-Instruct-AWQ,ok,0.918,10.629,13.01,0.7999,0.8509,0.788,MCL,0.7251,0.7991,0.6745,0.8323

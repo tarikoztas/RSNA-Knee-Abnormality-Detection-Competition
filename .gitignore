@@ -1,0 +1,126 @@
+# ============================================================
+# RSNA Knee — .gitignore
+#
+# Mantık: "veri varsayılan olarak kapalı, istisnalar açıkça izinli".
+# Otelde oda kapıları kilitli, sadece lobi açık gibi. Yeni bir çıktı
+# dosyası ürettiğinde otomatik olarak dışarıda kalır; içeri almak
+# istersen aşağıdaki "!" satırlarına elle eklersin.
+# ============================================================
+
+# ---------- 1) SIRLAR: asla commit'lenmemeli ----------
+# Kaggle API anahtarı (username + key düz metin JSON)
+kaggle.json
+.kaggle/
+# Hugging Face / diğer servis token'ları
+.huggingface/
+*.hf_token
+# Genel sır dosyaları
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+.netrc
+_netrc
+secrets.*
+credentials.*
+*secret*.json
+*credential*.yaml
+
+# ---------- 2) YARIŞMA VERİSİ ve TÜREVLERİ ----------
+# NEDEN: Kaggle kuralları yarışma verisinin yeniden dağıtımını yasaklar.
+# Ayrıca radyoloji raporları de-identified olsa da hasta metnidir —
+# halka açık bir repoda durmamalı. Rapor metni içeren her dosya burada.
+# Baştaki "/" = sadece proje kökü. Yoksa src/data/ gibi KOD klasörleri de
+# yanlışlıkla elenir.
+/data/
+/input/
+/raw/
+*.dcm
+*.dicom
+*.nii
+*.nii.gz
+
+# outputs/ altındaki HER ŞEY varsayılan kapalı ("outputs/**"),
+# sadece açıkça izin verilen özet dosyaları açık. Yarın yeni bir çıktı
+# üretirsen otomatik olarak dışarıda kalır — güvenli taraf varsayılan.
+outputs/**
+# Dizinlerin kendisini aç ki git içeri bakabilsin (yoksa istisnalar çalışmaz):
+!outputs/
+!outputs/*/
+# Hasta metni İÇERMEYEN, tamamen toplulaştırılmış (aggregate) özetler:
+!outputs/phase1a/label_distribution.csv
+!outputs/phase1a/phase1a_summary.txt
+!outputs/phase1b/bakeoff_summary.csv
+!outputs/phase1b/bakeoff_best_per_label.csv
+
+# --- UID listeleri: yarışma verisinden türetilmiş, public repoya gitmez ---
+# make_devset.py'nin ÜRETTİĞİ dosya. Kaynak tools/make_devset.py repoda
+# duruyor; klonlayan kişi veriye erişimi varsa aynı listeyi yeniden üretir.
+src/labels/devset_ids.py
+
+# notebooks/*.ipynb dosyaları tools/py2ipynb.py ile .py'den ÜRETİLİR.
+# 03'ünkü, `%%writefile` direktifi yüzünden devset_ids.py'nin tüm içeriğini
+# (107 UID) hücreye gömüyor — yani .py'yi ignore etmek tek başına yetmezdi.
+# Kural: kaynağı sakla, türevi sakla-ma. .py'ler repoda, üretme komutu:
+#     python tools/py2ipynb.py notebooks/03_weak_labels_llm.py
+notebooks/*.ipynb
+
+# ---------- 3) MODEL AĞIRLIKLARI / BÜYÜK DOSYALAR ----------
+# GitHub dosya başına 100 MB'ı reddeder; checkpoint'ler oraya ait değil.
+*.ckpt
+*.pt
+*.pth
+*.safetensors
+*.bin
+*.onnx
+*.h5
+*.ftz
+*.gguf
+checkpoints/
+weights/
+wandb/
+mlruns/
+lightning_logs/
+
+# ---------- 4) PYTHON ----------
+__pycache__/
+*.py[cod]
+*.so
+.Python
+/build/
+/dist/
+*.egg-info/
+.eggs/
+.venv/
+venv/
+/env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---------- 5) NOTEBOOK ----------
+# Checkpoint kopyaları eski çıktıları taşıyabilir.
+.ipynb_checkpoints/
+*-checkpoint.ipynb
+
+# ---------- 6) EDİTÖR / İŞLETİM SİSTEMİ ----------
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ---------- 7) LOG / GEÇİCİ ----------
+*.log
+/logs/
+/tmp/
+/temp/
+*.tmp

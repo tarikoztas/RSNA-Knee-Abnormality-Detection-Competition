@@ -1,0 +1,45 @@
+======================================================================
+FAZ 1A + LATERALITE SONUC OZETI
+======================================================================
+Taranan: 4,407 study / 24,371 seri
+
+--- ETIKET ---
+  toplam 4,407 | gold 58 (1.32%) | etiketsiz 4,349 | kismi 0
+  AUC olculemez etiket (<5 ornek): 0/12  zayif(<15): 3
+  en nadir 3:
+    MCL                poz=9    prevalans=0.155
+    Lateral OA         poz=11   prevalans=0.19
+    Baker's            poz=12   prevalans=0.207
+
+--- DIL (fasttext-lid176) ---
+    en          1,730  (39.3%)
+    es            682  (15.5%)
+    tr            546  (12.4%)
+    el            321  ( 7.3%)
+    de            263  ( 6.0%)
+    sh            231  ( 5.2%)
+    bg            220  ( 5.0%)
+    nl            152  ( 3.4%)
+    hr            137  ( 3.1%)
+    fr             81  ( 1.8%)
+    ?              41  ( 0.9%)
+    bs              3  ( 0.1%)
+
+--- SERI ---
+  study basina seri: medyan 5 (min 3, max 14)
+  uc duzlemin hepsi olan study: 4,407/4,407 (100.0%)
+
+--- GRUP ANAHTARI ---
+  Manufacturer                   n_grup=11    en_buyuk=0.239  tek_studyli=0    gold_grup=8
+  Manufacturer + Model           n_grup=51    en_buyuk=0.129  tek_studyli=8    gold_grup=26
+  Manufacturer + Model + Field   n_grup=59    en_buyuk=0.102  tek_studyli=8    gold_grup=29
+  lang                           n_grup=12    en_buyuk=0.393  tek_studyli=0    gold_grup=9
+  lang + Manufacturer            n_grup=40    en_buyuk=0.099  tek_studyli=3    gold_grup=22
+  lang + Manufacturer + Model    n_grup=79    en_buyuk=0.059  tek_studyli=16   gold_grup=32
+
+--- LATERALITE ---
+  tag      : seri 49.2% -> study 50.0%
+  katman1+2: seri 58.0% -> study 58.2%
+  katman3  : eski isabet 0.861 -> yeni en iyi 0.988  (acik (olu_bolge=0.0 mm))
+  NIHAI study kapsami: 97.8%
+======================================================================
