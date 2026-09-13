@@ -64,7 +64,7 @@ src/labels/devset_ids.py
 
 # notebooks/*.ipynb dosyaları tools/py2ipynb.py ile .py'den ÜRETİLİR.
 # 03'ünkü, `%%writefile` direktifi yüzünden devset_ids.py'nin tüm içeriğini
-# (107 UID) hücreye gömüyor — yani .py'yi ignore etmek tek başına yetmezdi.
+# (87 UID) hücreye gömüyor — yani .py'yi ignore etmek tek başına yetmezdi.
 # Kural: kaynağı sakla, türevi sakla-ma. .py'ler repoda, üretme komutu:
 #     python tools/py2ipynb.py notebooks/03_weak_labels_llm.py
 notebooks/*.ipynb
