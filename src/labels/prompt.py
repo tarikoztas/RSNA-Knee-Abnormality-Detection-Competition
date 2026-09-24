@@ -120,7 +120,17 @@ FEW_SHOT = [
     },
 ]
 
-SYSTEM_PROMPT = f"""\
+# "minimal -> uncertain" kurali AYRI tutuluyor cunku ABLATION adayi: Tur 3'te
+# kapsam 0.788 -> 0.662 dustu ve F1_absent 0.7251 -> 0.6805 geriledi. Bas suphe
+# bu kural, ama ayni turda gudumlu decoding de degistigi icin atif yapilamadi.
+# Acip kapatarak olcebilmek icin sablondan soyuldu.
+RULE_MINIMAL = '''7. MINIMAL FINDINGS. If the only wording is "minimal", "trace", "mild",
+   "grade I", "questionable" or "suspected", prefer "uncertain" (0.4-0.6) over
+   "present". A definite finding is what "present" is for.
+
+'''
+
+SYSTEM_PROMPT_TEMPLATE = """\
 You extract structured findings from knee MRI radiology reports.
 
 Reports come from 19+ imaging centres on 5 continents and are written in at least
@@ -181,11 +191,7 @@ RULES — read all of them, they are where mistakes happen.
    ligament", that is NOT MCL, even in a report that mostly discusses the medial
    side. Read the structure actually named in the sentence you are quoting.
 
-7. MINIMAL FINDINGS. If the only wording is "minimal", "trace", "mild",
-   "grade I", "questionable" or "suspected", prefer "uncertain" (0.4-0.6) over
-   "present". A definite finding is what "present" is for.
-
-8. DO NOT INFER ACROSS FINDINGS. An ACL tear does not make an effusion
+{RULE_MINIMAL}8. DO NOT INFER ACROSS FINDINGS. An ACL tear does not make an effusion
    "present". Judge each finding only on what the report says about it.
 
 9. "confidence" is 0.0-1.0 and reflects how sure you are about the STATUS you
@@ -202,6 +208,23 @@ Return only a JSON object, no prose before or after:
   "findings": {{"<finding name>": {{"status": "...", "confidence": 0.0, "evidence": "..."}}, ...}}}}
 
 All 12 finding names must be present, spelled exactly as listed above."""
+
+
+def build_system_prompt(with_minimal_rule: bool = True) -> str:
+    """Sistem prompt'unu uret.
+
+    `with_minimal_rule=False` 7. kurali ("minimal/trace/mild -> uncertain")
+    tamamen cikarir. Kural numaralarinda bosluk olusur (6'dan 8'e atlar) ama bu
+    onemsiz — modelin numaralara degil iceriklerine bakmasi gerekiyor ve
+    ablationi kural metinlerini yeniden numaralandirmadan yapmak, iki varyant
+    arasindaki TEK farkin o kural olmasini garanti ediyor.
+    """
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        LABEL_DEFINITIONS=LABEL_DEFINITIONS,
+        RULE_MINIMAL=RULE_MINIMAL if with_minimal_rule else "")
+
+
+SYSTEM_PROMPT = build_system_prompt(True)
 
 
 def build_user_message(report: str) -> str:

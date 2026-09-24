@@ -1,6 +1,3 @@
-model,durum,parse_ok,s_rapor,tam_kosu_saat,F1_mask,AUC_mask,kapsam,en_zayif,F1_absent,AUC_absent,F1_half,AUC_half
-Qwen2.5-7B-Instruct,HATA: RuntimeError,,,,,,,,,,,
-Qwen3-8B,HATA: RuntimeError,,,,,,,,,,,
-Qwen2.5-14B-Instruct-AWQ,ok,0.898,15.24,18.66,0.7774,0.8351,0.737,MCL,0.69,0.769,0.6573,0.8148
-Qwen3-14B-AWQ,ok,0.0,17.477,21.39,,,0.0,,0.0,0.5,0.5048,0.5
-Qwen2.5-32B-Instruct-AWQ,ok,0.918,10.629,13.01,0.7999,0.8509,0.788,MCL,0.7251,0.7991,0.6745,0.8323
+model,durum,gudumlu,parse_ok,cikti_token,s_rapor,tam_kosu_saat,F1_mask,AUC_mask,kapsam,en_zayif,F1_absent,AUC_absent,F1_half,AUC_half
+Qwen2.5-14B-Instruct-AWQ,ok,structured_outputs=StructuredOutputsParams(json=...)  [V1],0.857,462.7,5.242,6.42,0.7591,0.8247,0.775,MCL,0.683,0.7649,0.664,0.8117
+Qwen2.5-32B-Instruct-AWQ,ok,structured_outputs=StructuredOutputsParams(json=...)  [V1],0.816,479.1,10.14,12.41,0.8291,0.8698,0.662,MCL,0.6805,0.7601,0.6467,0.8219

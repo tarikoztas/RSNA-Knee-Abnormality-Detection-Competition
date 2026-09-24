@@ -307,6 +307,55 @@ d = inspect.signature(dio.detect_laterality).parameters
 check("katman 3 varsayilan ACIK", d["use_ipp_layer"].default is True)
 check("varsayilan olu bolge 30 mm", d["ipp_deadzone"].default == 30.0)
 
+# ---------------------------------------------------------------------------
+print()
+print("--- seri secimi (select_series) ---")
+
+def srow(uid, plane, fluid=0, fat=0, n=30):
+    return {"SeriesInstanceUID": uid, "Anatomical_Plane": plane,
+            "Fluid_Sensitive": fluid, "Fat_Suppression": fat, "n_files": n}
+
+rows = [srow("a", "Sagittal", fluid=0, fat=0, n=40),
+        srow("b", "Sagittal", fluid=1, fat=0, n=20),
+        srow("c", "Coronal",  fluid=0, fat=1, n=30),
+        srow("d", "Axial",    fluid=1, fat=1, n=25)]
+sel = dio.select_series(rows)
+check("uc duzlem de secildi", set(sel) == {"Sagittal", "Coronal", "Axial"}, sorted(sel))
+check("fluid_sensitive slice sayisini eziyor",
+      sel["Sagittal"]["SeriesInstanceUID"] == "b", sel["Sagittal"]["SeriesInstanceUID"])
+check("tek aday varsa o secilir", sel["Coronal"]["SeriesInstanceUID"] == "c")
+
+# Esit fluid/fat -> slice sayisi karar verir
+rows2 = [srow("x", "Axial", fluid=1, fat=1, n=20), srow("y", "Axial", fluid=1, fat=1, n=45)]
+check("esitlikte cok slice'li kazanir",
+      dio.select_series(rows2)["Axial"]["SeriesInstanceUID"] == "y")
+check("eksik duzlem anahtarda yok", "Coronal" not in dio.select_series(rows2))
+check("bos girdi -> bos sonuc", dio.select_series([]) == {})
+
+print()
+print("--- slice alt ornekleme (subsample_slices) ---")
+v = np.arange(30, dtype=np.float32).reshape(30, 1, 1)
+s = dio.subsample_slices(v, 16)
+check("16 slice'a indi", s.shape[0] == 16, s.shape)
+check("ilk ve son korundu", s[0, 0, 0] == 0 and s[-1, 0, 0] == 29,
+      (s[0, 0, 0], s[-1, 0, 0]))
+check("artan sirada", bool(np.all(np.diff(s[:, 0, 0]) > 0)))
+check("n'den az slice varsa dokunulmuyor",
+      dio.subsample_slices(v[:10], 16).shape[0] == 10)
+# Esit araliklilik: ardisik farklar birbirine yakin olmali
+d = np.diff(s[:, 0, 0])
+check("araliklar esit (bastan kesme DEGIL)", d.max() - d.min() <= 1.0, (d.min(), d.max()))
+
+print()
+print("--- uint8 cevrimi (to_uint8) ---")
+f = np.array([[[0.0, 0.5, 1.0]]], dtype=np.float32)
+u = dio.to_uint8(f)
+check("dtype uint8", u.dtype == np.uint8)
+check("0 -> 0, 1 -> 255", u[0, 0, 0] == 0 and u[0, 0, 2] == 255, u.ravel())
+check("0.5 -> ~128", 127 <= u[0, 0, 1] <= 128, u[0, 0, 1])
+check("aralik disi kirpiliyor",
+      dio.to_uint8(np.array([[[-1.0, 2.0]]], np.float32)).ravel().tolist() == [0, 255])
+
 print("\n" + "=" * 60)
 if FAILS:
     print("BASARISIZ (" + str(len(FAILS)) + "):")

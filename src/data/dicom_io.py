@@ -678,3 +678,144 @@ def load_series(sdir: str, size: int = 256, target_side: str = "R",
                   [(k, v) for k, v in flags.items() if k != "kept_idx"]),
         errors=errors,
     )
+
+
+# ===========================================================================
+# Faz 2.1 / 2.2 — seri secimi ve study duzeyinde on isleme
+# ===========================================================================
+# Bir study'de ortalama 5.5 seri var (Faz 1A). Hepsini islemek pahali, rastgele
+# secmek bilgi kaybi. Metadata gudumlu secim: her duzlemden BIR seri, fluid
+# sensitive olani onceliklendirerek.
+#
+# Neden bu isliyor: Faz 1A'da her study'nin ucunde de (Sagittal/Coronal/Axial)
+# en az bir seri oldugu olculdu — 4.407/4.407, yani %100. Maskeleme gerekmiyor.
+#
+# Oncelik gerekcesi (ARCHITECTURE Bolum 1.3): Effusion / Synovitis / Contusion /
+# Baker's sivi-duyarli sekanslarda gorunur; menisküs ve ACL sagittal'de;
+# MCL coronal'de; PF OA axial'de. Duzlem basina bir seri hepsini kapsar.
+PLANES = ("Sagittal", "Coronal", "Axial")
+
+
+def select_series(series_rows, planes=PLANES):
+    """Study'nin serilerinden duzlem basina bir tane sec.
+
+    `series_rows`: her elemani en az su anahtarlari olan sozluk/Series:
+        SeriesInstanceUID, Anatomical_Plane, Fluid_Sensitive, Fat_Suppression,
+        (opsiyonel) n_files
+    Dondurur: {duzlem: secilen_satir}  — bulunamayan duzlem anahtarda olmaz.
+
+    Siralama olcutu, en onemliden en az onemliye:
+      1. Fluid_Sensitive  (sivi-duyarli sekanslar 4 bulguyu dogrudan gosterir)
+      2. Fat_Suppression  (yag baskilama odemi belirginlestirir)
+      3. slice sayisi     (daha fazla kesit = daha iyi 2.5D baglami)
+    """
+    out = {}
+    for pl in planes:
+        cand = [r for r in series_rows
+                if str(_get(r, "Anatomical_Plane", "")).strip() == pl]
+        if not cand:
+            continue
+        cand.sort(key=lambda r: (int(_get(r, "Fluid_Sensitive", 0) or 0),
+                                 int(_get(r, "Fat_Suppression", 0) or 0),
+                                 int(_get(r, "n_files", 0) or 0)), reverse=True)
+        out[pl] = cand[0]
+    return out
+
+
+def _get(row, key, default=None):
+    """dict ve pandas Series'i ayni sekilde oku."""
+    try:
+        v = row[key]
+    except (KeyError, IndexError, TypeError):
+        return default
+    return default if v is None else v
+
+
+def subsample_slices(vol: np.ndarray, n: int) -> np.ndarray:
+    """Slice eksenini n'e esit arali indir (ya da n'den azsa oldugu gibi birak).
+
+    Neden bastan kesmek DEGIL esit aralikli: bastan/sondan kesmek anatominin
+    bir ucunu tamamen atar. Esit aralikli ornekleme tum hacmi temsil eder.
+    n'den az slice varsa tekrar ederek doldurmuyoruz — gercek slice sayisi
+    metadata'da saklaniyor, egitim tarafi buna gore pencere secer.
+    """
+    if vol.shape[0] <= n:
+        return vol
+    idx = np.linspace(0, vol.shape[0] - 1, n).round().astype(int)
+    return vol[idx]
+
+
+def to_uint8(vol: np.ndarray) -> np.ndarray:
+    """[0,1] float hacmi uint8'e cevir — DISKTE IKI KAT YER KAZANCI.
+
+    normalize_volume zaten percentile clip + min-max yapip [0,1]'e getiriyor.
+    256 seviyeye yuvarlamak MR icin pratikte kayipsiz: orijinal 12-bit ama
+    normalizasyon sonrasi ayirt edici bilgi bu araliga zaten sikismis durumda.
+    float16 saklamak iki kat yer yer, karsiligi gorunmuyor.
+    """
+    return np.clip(vol * 255.0 + 0.5, 0, 255).astype(np.uint8)
+
+
+def load_study(data_root, study_uid, series_rows, size=256, n_slices=16,
+               target_side="R", workers=8, use_ipp_layer=True,
+               ipp_deadzone=30.0, split="train"):
+    """Bir study'yi uctan uca isle: seri sec -> oku -> normalize -> aynala -> resize.
+
+    Dondurur: (veri_sozlugu, bilgi_sozlugu)
+      veri: {duzlem: uint8 array (n_slices, size, size)}
+      bilgi: taraf, aynalama, secilen seri UID'leri, hatalar, sureler
+
+    LATERALITE STUDY DUZEYINDE cozuluyor, seri duzeyinde degil. Sebep Faz 1A
+    bulgusu: 25 study'de `Laterality` tag'i seriler arasinda CELISKILI ve
+    25'inin 25'inde merkez-x TEK taraf gosterdi (yani tag yanlis, iki diz yok).
+    Cogunluk oyu bunu duzeltir; seri basina karar vermek study'yi kendi icinde
+    tutarsiz hale getirir — aynalanmis ve aynalanmamis seriler ayni study'de.
+    """
+    sel = select_series(series_rows)
+    dss_per_plane, raw = {}, {}
+    errors = []
+    for pl, row in sel.items():
+        sdir = series_dir(data_root, study_uid,
+                          str(_get(row, "SeriesInstanceUID")), split=split)
+        paths = list_dicom_files(sdir)
+        dss, errs = read_datasets(paths, workers=workers)
+        errors.extend(errs)
+        if not dss:
+            continue
+        dss, sort_info = sort_datasets(dss)
+        dss_per_plane[pl] = dss
+        raw[pl] = (dss, sort_info)
+
+    if not raw:
+        return {}, {"laterality": None, "error": "hic seri okunamadi",
+                    "errors": errors}
+
+    # 1) taraf: TUM secilen serilerin oyu
+    side, lat_info = resolve_study_laterality(
+        list(dss_per_plane.values()), use_ipp_layer=use_ipp_layer,
+        ipp_deadzone=ipp_deadzone)
+
+    data, per_plane = {}, {}
+    for pl, (dss, sort_info) in raw.items():
+        iop = dss[0].get("ImageOrientationPatient", None)
+        vol, flags = extract_pixels(dss)
+        vol = normalize_volume(vol, invert=flags["monochrome1"])
+        mirrored, axis = False, None
+        if target_side is not None and side is not None and side != target_side:
+            vol, axis = apply_lr_mirror(vol, iop)
+            mirrored = axis is not None
+        vol = subsample_slices(vol, n_slices)
+        vol = resize_volume(vol, size)
+        data[pl] = to_uint8(vol)
+        ps = dss[0].get("PixelSpacing", None)
+        per_plane[pl] = {
+            "series_uid": str(dss[0].get("SeriesInstanceUID", "")),
+            "n_slices_native": len(dss), "n_slices_kept": int(vol.shape[0]),
+            "mirrored": mirrored, "mirror_axis": axis,
+            "sort_method": sort_info["method"],
+            "pixel_spacing": float(ps[0]) if ps is not None else None,
+        }
+
+    return data, {"laterality": side, "laterality_info": lat_info,
+                  "planes": per_plane, "n_errors": len(errors),
+                  "errors": errors[:3]}

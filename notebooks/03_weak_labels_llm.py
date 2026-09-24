@@ -139,7 +139,7 @@ else:
 # ## 1. Yapılandırma
 
 # %%
-MODE = "bakeoff"          # "bakeoff" | "full"
+MODE = "retry"            # "retry" | "ablation" | "bakeoff" | "full"
 
 # Aday modeller: kucukten buyuge. VRAM'e sigmayanlar otomatik atlanir.
 # `vram_gb` = kabaca gereken bos VRAM (agirliklar + KV cache + aktivasyon).
@@ -152,11 +152,44 @@ CANDIDATES = [
     {"id": "Qwen/Qwen2.5-32B-Instruct-AWQ", "vram_gb": 24, "tp": 2, "quant": "awq"},
 ]
 
-# Tam kosuda kullanilacak model — bake-off sonucuna gore ELLE doldur.
-FULL_RUN_MODEL = None     # orn. {"id": "Qwen/Qwen2.5-14B-Instruct-AWQ", "vram_gb": 12, "tp": 1, "quant": "awq"}
+# --- ABLATION (Tur 3 sonucu) -------------------------------------------------
+# 14B kazandi: F1_absent 0.6830 vs 32B 0.6805 (n=20, fark gurultu) ama
+# 6.42 saat vs 12.41 — tek oturuma sigan tek model.
+ABLATION_MODEL = {"id": "Qwen/Qwen2.5-14B-Instruct-AWQ", "vram_gb": 12,
+                  "tp": 2, "quant": "awq"}
 
-MAX_MODEL_LEN = 4096      # en uzun rapor 4.743 karakter -> few-shot ile birlikte yeter
-MAX_NEW_TOKENS = 700
+# Tur 1 -> Tur 3'te DORT sey birden degisti, o yuzden F1_absent dususunu
+# (0.7251 -> 0.6805) prompt'a mi decoding'e mi atfedecegimizi bilmiyoruz.
+# 14B artik hizli oldugu icin ayiklamak ~12 dakika. Tek degisken: 7. kural.
+ABLATION_VARIANTS = [
+    ("minimal_VAR", True),     # mevcut prompt
+    ("minimal_YOK", False),    # "minimal/trace/mild -> uncertain" kurali cikarildi
+]
+
+# Tam kosuda kullanilacak model — bake-off sonucuna gore ELLE doldur.
+# Bake-off kazanani: 14B, F1_absent 0.6830 (32B 0.6805) ve YARI surede.
+FULL_RUN_MODEL = {"id": "Qwen/Qwen2.5-14B-Instruct-AWQ", "vram_gb": 12,
+                  "tp": 2, "quant": "awq"}
+
+# 4096 -> 8192. ONCEKI DEGER HATALIYDI ve olcum bunu acikca gosterdi:
+#   prompt oneki  ~3.355 token (sistem 5.720 + few-shot 4.344 karakter)
+#   4096 - 3355   =  ~740 token, rapor VE cikti icin TOPLAM
+# Yani 1.000 karakterden uzun her rapor cikti butcesini 700'un altina itiyordu.
+# Olculen sonuc (14B, Tur 3):
+#   rapor  0-800 kar -> parse_ok 1.000      1200-1600 -> 0.727
+#        800-1200    -> 0.867               2500-5000 -> 0.000
+# Bu kesilme degil BUTCE SIKISMASI; vLLM girdi+cikti <= max_model_len olacak
+# sekilde cikti butcesini kirpiyor ve JSON yarim kaliyor.
+# 8192 ile: onek 3.355 + en uzun rapor ~1.581 + cikti 1.100 = ~6.036, rahat pay var.
+MAX_MODEL_LEN = 8192
+# 700 -> 1100: gudumlu decoding modeli 12 bulgunun HEPSINI doldurmaya zorluyor,
+# kisa yoldan cikamiyor. Tur 3'te ortalama cikti 463-479 token'di ve parse_ok
+# gudumlu decoding ACIKKEN dustu (0.918 -> 0.816/0.857) — kesilme suphesi.
+# Kosu `n_capped` sayacini basiyor, hipotezi dogrudan test edecek.
+# 1100 -> 1400: tam kosuda 53 rapor (%1.2) tavana dayanip kesildi ve
+# ayristirilamadi (n_fail_capped == n_fail == 53, yani TEK sebep buydu).
+# En uzun prompt 5.700 token, 5700+1400=7100 < 8192 — hala rahat.
+MAX_NEW_TOKENS = 1400
 OUT_DIR = "/kaggle/working"
 
 # Token basina 5 aday logprob dondurmek buyuk bir serilestirme yuku ve guven
@@ -178,6 +211,9 @@ LOGPROBS = None
 
 # %%
 #!writefile src/labels/devset_ids.py /kaggle/working/devset_ids.py
+
+# %%
+#!writefile src/labels/retry_ids.py /kaggle/working/retry_ids.py
 
 # %%
 #!writefile src/labels/vllm_runner.py /kaggle/working/vllm_runner.py
@@ -271,10 +307,25 @@ train = pd.read_csv(f"{DATA}/train.csv")
 train["Report"] = train["Report"].fillna("")
 by_uid = train.set_index("StudyInstanceUID")
 
-if MODE == "bakeoff":
+# HATA DUZELTMESI: eskiden `if MODE == "bakeoff"` ... `else: tum veri` yaziyordu.
+# "ablation" modu else dalina dustu ve 49 rapor yerine 4.407 raporu isledi —
+# 8.4 saatlik kazara bir tam kosu. (Sonuc iyi cikti ama niyet bu degildi.)
+# Artik mod ADI ile eslestiriliyor, bilinmeyen mod hata veriyor.
+if MODE == "retry":
+    # Tam kosuda 1100 token tavanina dayanip kesilen 53 rapor. Sadece bunlari
+    # yeniden islemek 4.407'yi bastan almaktan ~80 kat hizli.
+    import retry_ids as R
+    uids = [u for u in R.RETRY if u in by_uid.index]
+elif MODE in ("bakeoff", "ablation"):
     uids = [u for u in D.DEVSET if u in by_uid.index]
-else:
+elif MODE == "full":
     uids = train["StudyInstanceUID"].tolist()
+else:
+    raise ValueError(f"bilinmeyen MODE: {MODE!r}. "
+                     'Gecerli: "retry" | "ablation" | "bakeoff" | "full"')
+_ne = {"retry": "kesilen 53 rapor", "bakeoff": "49 raporluk dev set",
+       "ablation": "49 raporluk dev set", "full": "TUM train seti"}
+print(f"  (mod '{MODE}' -> {_ne[MODE]})")
 reports = [(u, by_uid.loc[u, "Report"]) for u in uids]
 print(f"MODE={MODE}  ->  {len(reports):,} rapor")
 
@@ -422,6 +473,86 @@ def run_transformers(model_id, reports, out_path, quant=None, batch_size=8):
                   "s_per_report": round(gen_s / max(len(recs), 1), 3)}
 
 # %% [markdown]
+# ## 6b. Ablation — tek değişken: "minimal → uncertain" kuralı
+#
+# Tur 3'te dört şey birden değişti (güdümlü decoding, önek cache'i, prompt
+# kuralları, logprobs) ve `F1_absent` 0.7251 → 0.6805 geriledi. Hangisinin
+# yaptığını bilmiyoruz. Bu bölüm **sadece 7. kuralı** açıp kapatıp ölçüyor;
+# diğer her şey sabit.
+#
+# Aynı zamanda `MAX_NEW_TOKENS = 1100` ile kesilme hipotezini test ediyor:
+# `n_capped` sayacı sıfıra yakınsa `parse_ok` düşüşünün sebebi kesilmeydi.
+
+# %%
+if MODE == "ablation":
+    import vllm_runner as VR
+
+    abl_rows, abl_ev = [], {}
+    for vtag, with_rule in ABLATION_VARIANTS:
+        print("=" * 72)
+        print(f"VARYANT: {vtag}   (7. kural {'VAR' if with_rule else 'YOK'})")
+        print("=" * 72)
+        sys_prompt = P.build_system_prompt(with_minimal_rule=with_rule)
+        print(f"  sistem prompt: {len(sys_prompt)} karakter")
+        out_path = f"{OUT_DIR}/abl_{vtag}.jsonl"
+        try:
+            recs, meta = VR.run(
+                ABLATION_MODEL["id"], reports, out_path,
+                tensor_parallel_size=ABLATION_MODEL["tp"],
+                max_model_len=MAX_MODEL_LEN, quantization=ABLATION_MODEL["quant"],
+                max_tokens=MAX_NEW_TOKENS, logprobs=LOGPROBS,
+                system_prompt=sys_prompt, tag=vtag)
+        except Exception as e:
+            print(f"  BASARISIZ: {type(e).__name__}: {str(e)[:300]}")
+            abl_rows.append({"varyant": vtag, "durum": f"HATA: {type(e).__name__}"})
+            continue
+        if not recs:
+            recs = [json.loads(l) for l in open(out_path, encoding="utf-8")]
+        pred = pd.DataFrame(recs)
+
+        row = {"varyant": vtag, "durum": "ok",
+               "parse_ok": round(meta.get("parse_ok_rate", np.nan), 3),
+               "tavana_dayanan": meta.get("n_capped"),
+               "cikti_token": meta.get("mean_out_tokens"),
+               "s_rapor": meta.get("s_per_report"),
+               "tam_kosu_saat": round(meta.get("s_per_report", 0) * 4407 / 3600, 2)}
+        for unc in ("mask", "absent", "half"):
+            ev = EV.evaluate(pred, gold_dev, uncertain=unc)
+            s = EV.summarise(ev)
+            row[f"F1_{unc}"] = s["macro_F1"]
+            row[f"AUC_{unc}"] = s["macro_AUC"]
+            if unc == "mask":
+                row["kapsam"] = s["ort_kapsam"]
+                abl_ev[vtag] = ev
+        # Guven kalitesi de varyanta gore degisebilir
+        cq = EV.confidence_quality(pred, gold_dev, conf_suffix="_conf")
+        row["AUC_guven"] = (round(float(cq["AUC_guven"].mean(skipna=True)), 3)
+                            if len(cq) and cq["AUC_guven"].notna().any() else None)
+        abl_rows.append(row)
+        print()
+
+    abl = pd.DataFrame(abl_rows)
+    print("=" * 72)
+    print("ABLATION SONUCLARI")
+    print("=" * 72)
+    print(abl.to_string(index=False))
+    abl.to_csv(f"{OUT_DIR}/ablation_summary.csv", index=False)
+
+    ok_rows = abl[abl["durum"] == "ok"] if "durum" in abl.columns else abl
+    if len(ok_rows) == 2:
+        a = ok_rows.iloc[0]
+        b = ok_rows.iloc[1]
+        print()
+        print("--- KARAR ---")
+        for k in ("F1_absent", "AUC_half", "kapsam", "parse_ok"):
+            print(f"  {k:<12} {a['varyant']}={a[k]}   {b['varyant']}={b[k]}"
+                  f"   fark={b[k]-a[k]:+.4f}")
+        kazanan = a if a["F1_absent"] >= b["F1_absent"] else b
+        print()
+        print(f"  >> F1_absent'e gore kazanan: {kazanan['varyant']}")
+        print(f"  >> Tur 1 (eski prompt, gudumsuz) referansi: F1_absent 0.7251")
+
+# %% [markdown]
 # ## 7. Bake-off
 #
 # Her model için: çalıştır → gold_dev'de değerlendir → tabloya ekle.
@@ -533,6 +664,42 @@ if MODE == "bakeoff" and len(all_ev):
         print("  o durumda duz agirlik kullanilir.")
 
 # %% [markdown]
+# ## 7c. Retry — kesilen raporları yeniden işle
+#
+# Tam koşuda 53 rapor (%1.2) `max_tokens` tavanına dayanıp kesildi; JSON yarım
+# kaldı. Hepsinin sebebi aynıydı (`n_fail_capped == n_fail == 53`), yani
+# `MAX_NEW_TOKENS = 1400` ile düzelmesi bekleniyor.
+#
+# Sadece o 53'ü işliyoruz — 4.407'yi baştan almak ~8.4 saat, bu ~7 dakika.
+
+# %%
+if MODE == "retry":
+    import vllm_runner as VR
+
+    tag = FULL_RUN_MODEL["id"].split("/")[-1] if FULL_RUN_MODEL else "retry"
+    out_path = f"{OUT_DIR}/retry_{tag}.jsonl"
+    recs, meta = VR.run(FULL_RUN_MODEL["id"], reports, out_path,
+                        tensor_parallel_size=FULL_RUN_MODEL["tp"],
+                        max_model_len=MAX_MODEL_LEN,
+                        quantization=FULL_RUN_MODEL["quant"],
+                        max_tokens=MAX_NEW_TOKENS, logprobs=LOGPROBS, tag="retry")
+    print(json.dumps(meta, ensure_ascii=False, indent=2))
+
+    df_r = pd.DataFrame(recs if recs else
+                        [json.loads(l) for l in open(out_path, encoding="utf-8")])
+    print()
+    print(f"Yeniden islenen : {len(df_r)}")
+    print(f"Basarili        : {int(df_r.parse_ok.sum())} / {len(df_r)}"
+          f"  ({df_r.parse_ok.mean():.1%})")
+    print(f"Hala tavanda    : {int((df_r.n_out_tokens >= MAX_NEW_TOKENS).sum())}")
+    if df_r.parse_ok.mean() == 1.0:
+        print("  >> HEPSI KURTARILDI. Faz 1.8 tam kapsam: 4407/4407")
+    else:
+        kalan = int((~df_r.parse_ok).sum())
+        print(f"  >> {kalan} rapor hala basarisiz. Tavanda iseler MAX_NEW_TOKENS")
+        print("     daha da artirilabilir; degilse baska bir sebep var.")
+
+# %% [markdown]
 # ## 8. Tam koşu
 #
 # `MODE = "full"` ve `FULL_RUN_MODEL` doldurulduğunda çalışır.
@@ -591,3 +758,78 @@ if MODE == "full":
     print()
     print("  Bu tablo Faz 2.8'deki etiket basina loss agirliklandirmasini belirler:")
     print("  F1'i dusuk etiketlerde weak-label agirligi dusurulur.")
+
+# %% [markdown]
+# ## 9. TESLİM ÖZETİ — sadece bu hücrenin çıktısını göndermek yeterli
+#
+# **Neden en sonda ve ayrı bir hücre:** vLLM binlerce `INFO` satırı basıyor ve
+# Kaggle uzun çıktıları kırpıyor. Üç turdur kritik satırlar (`gudumlu decoding`,
+# özet tablo) o selin içinde kayboldu. Bu hücre en son çalıştığı için önündeki
+# log seli onu etkilemiyor — çıktısı kısa ve eksiksiz.
+#
+# **Çıktıların kalıcı olması için `Save Version → Save & Run All` kullan.**
+# Interaktif oturumda `/kaggle/working` oturum bitince uçuyor (No persistence).
+
+# %%
+print("=" * 72)
+print("TESLIM OZETI")
+print("=" * 72)
+
+print()
+print("--- /kaggle/working icerigi ---")
+for f in sorted(os.listdir(OUT_DIR)):
+    try:
+        kb = os.path.getsize(os.path.join(OUT_DIR, f)) / 1024
+        print(f"  {kb:9.1f} KB  {f}")
+    except OSError:
+        print(f"  {'?':>9}     {f}")
+
+for ad, yol in [("ABLATION SUMMARY", f"{OUT_DIR}/ablation_summary.csv"),
+                ("BAKEOFF SUMMARY", f"{OUT_DIR}/bakeoff_summary.csv"),
+                ("KAZANAN — ETIKET BAZINDA", f"{OUT_DIR}/bakeoff_best_per_label.csv"),
+                ("KATMAN 3 — GOLD HOLDOUT", f"{OUT_DIR}/layer3_holdout_eval.csv")]:
+    print()
+    print(f"--- {ad} ---")
+    if os.path.exists(yol):
+        print(pd.read_csv(yol).to_string(index=False))
+    else:
+        print("  (yok — bu mod calismadi)")
+
+print()
+print("--- RUN DIAGNOSTICS (model basina altyapi) ---")
+dp = f"{OUT_DIR}/run_diagnostics.jsonl"
+if os.path.exists(dp):
+    for line in open(dp, encoding="utf-8"):
+        d = json.loads(line)
+        print(f"  {d.get('tag') or d.get('model','?')}")
+        print(f"      gudumlu={d.get('guided_mode')}")
+        print(f"      butce_ok={d.get('budget_ok')}"
+              f"  max_model_len={d.get('max_model_len')}"
+              f"  en_uzun_prompt={d.get('max_prompt_tokens')}"
+              f"  max_tokens={d.get('max_tokens')}")
+        print(f"      tavana_dayanan={d.get('n_capped')}/{d.get('n')}"
+              f"  (bunlardan ayristirilamayan: {d.get('n_fail_capped')}"
+              f" / toplam hata {d.get('n_fail')})")
+        print(f"      parse_ok={d.get('parse_ok')}/{d.get('n')}"
+              f"  cikti_token_ort={d.get('mean_out_tokens')}"
+              f"  {d.get('s_per_report')} s/rapor"
+              f"  -> 4407 rapor ~{round(d.get('s_per_report',0)*4407/3600,2)} saat")
+else:
+    print("  (yok)")
+
+# Tam kosu yapildiysa etiket dagilimini da ozetle
+wl = f"{OUT_DIR}/weak_labels_layer1.csv"
+if os.path.exists(wl):
+    w = pd.read_csv(wl)
+    print()
+    print("--- TAM KOSU DURUMU ---")
+    print(f"  islenmis study: {len(w):,} / 4407   ayristirma: {w['parse_ok'].mean():.1%}")
+    st = pd.concat([w[f"{k}_status"] for k in P.LABELS if f"{k}_status" in w.columns])
+    print("  status dagilimi: " +
+          "  ".join(f"{k}={v:.1%}" for k, v in st.value_counts(normalize=True).items()))
+
+print()
+print("=" * 72)
+print("Bu blogu oldugu gibi gonder. Ayrica Output sekmesinden indir:")
+print("  bakeoff_summary.csv  ·  bakeoff_best_per_label.csv  ·  run_diagnostics.jsonl")
+print("=" * 72)

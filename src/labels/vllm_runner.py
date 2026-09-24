@@ -85,7 +85,8 @@ def make_sampling_params(schema, max_tokens=700, temperature=0.0, logprobs=None)
 # --------------------------------------------------------------------------
 # Prompt -> metin
 # --------------------------------------------------------------------------
-def build_chat_text(tokenizer, report: str, few_shot: bool = True) -> str:
+def build_chat_text(tokenizer, report: str, few_shot: bool = True,
+                    system_prompt: str = None) -> str:
     """Sohbet sablonunu uygulayip tek bir metin uret.
 
     `enable_thinking=False` neden gerekli (Faz 1.8 bulgusu):
@@ -94,7 +95,7 @@ def build_chat_text(tokenizer, report: str, few_shot: bool = True) -> str:
     0.000 cikti — 700 token'lik butce dusunmeye gitti, JSON'a hic sira gelmedi.
     Bu parametre eski sablonlarda yok, o yuzden TypeError yakalanip atlaniyor.
     """
-    msgs = [{"role": "system", "content": P.SYSTEM_PROMPT}]
+    msgs = [{"role": "system", "content": system_prompt or P.SYSTEM_PROMPT}]
     if few_shot:
         msgs += P.build_few_shot_messages()
     msgs.append({"role": "user", "content": P.build_user_message(report)})
@@ -171,7 +172,7 @@ def attach_logprob_conf(rec: dict, output) -> dict:
 def run(model_id, reports, out_path, tensor_parallel_size=1,
         max_model_len=4096, gpu_memory_utilization=0.90, quantization=None,
         few_shot=True, max_tokens=700, batch_log_every=200, dtype="auto",
-        logprobs=None):
+        logprobs=None, system_prompt=None, tag=None):
     """reports: [(study_uid, report_text), ...]. Sonuclari out_path'e JSONL yazar.
 
     Zaten yazilmis study'leri atlar (resume). Dondurur: (kayitlar, meta).
@@ -229,9 +230,28 @@ def run(model_id, reports, out_path, tensor_parallel_size=1,
     print(f"  gudumlu decoding: {guided_mode}")
     print(f"  logprobs: {logprobs if logprobs else 'kapali (hiz icin)'}")
 
-    prompts = [build_chat_text(tok, r, few_shot) for _, r in todo]
-    n_in = sum(len(tok(p).input_ids) for p in prompts[:20]) / min(20, len(prompts))
-    print(f"  ortalama girdi uzunlugu (ilk 20): {n_in:.0f} token")
+    prompts = [build_chat_text(tok, r, few_shot, system_prompt) for _, r in todo]
+
+    # BUTCE KONTROLU — bu kontrol olmadigi icin Tur 3'te sessizce veri kaybettik.
+    # vLLM girdi+cikti <= max_model_len olacak sekilde cikti butcesini KIRPAR ve
+    # uyari vermez; JSON yarim kalir, ayristirma basarisiz olur, sebebi de
+    # gorunmez. En uzun promptu olcup baştan haber veriyoruz.
+    lens = [len(tok(pr).input_ids) for pr in prompts]
+    n_in, n_max = sum(lens) / len(lens), max(lens)
+    bos = max_model_len - n_max
+    print(f"  girdi uzunlugu: ortalama {n_in:.0f}, EN UZUN {n_max} token")
+    print(f"  max_model_len={max_model_len} -> en uzun promptta cikti icin"
+          f" kalan: {bos} token  (istenen: {max_tokens})")
+    if bos < max_tokens:
+        kritik = sum(1 for L in lens if max_model_len - L < max_tokens)
+        print("  " + "!" * 66)
+        print(f"  !! BUTCE YETERSIZ: {kritik}/{len(lens)} promptta cikti butcesi")
+        print(f"  !! {max_tokens} token'in ALTINA dusuyor. Bu raporlarda JSON")
+        print(f"  !! yarim kalacak ve ayristirilamayacak.")
+        print(f"  !! COZUM: max_model_len >= {n_max + max_tokens} yap.")
+        print("  " + "!" * 66)
+    else:
+        print("  >> butce yeterli: tum promptlar tam cikti alabilir.")
 
     t0 = time.time()
     outs = llm.generate(prompts, sp)
@@ -251,14 +271,29 @@ def run(model_id, reports, out_path, tensor_parallel_size=1,
             recs.append(rec)
 
     ok = sum(r["parse_ok"] for r in recs)
+    # Kesilme teshisi: gudumlu decoding modeli 12 bulgunun HEPSINI doldurmaya
+    # zorluyor, kisa yoldan cikamiyor. Butce biterse JSON yarim kalir ve
+    # ayristirilamaz. Tur 3'te parse_ok gudumlu decoding ACIKKEN dustu — bu
+    # sayac o hipotezi dogrudan test ediyor.
+    n_capped = sum(1 for r in recs if r.get("n_out_tokens", 0) >= max_tokens)
+    n_bad_capped = sum(1 for r in recs
+                       if not r["parse_ok"] and r.get("n_out_tokens", 0) >= max_tokens)
     meta = {
-        "model": model_id, "n": len(recs), "parse_ok": ok,
+        "model": model_id, "tag": tag or model_id, "n": len(recs),
+        "parse_ok": ok,
         "parse_ok_rate": ok / max(len(recs), 1),
         "guided_mode": guided_mode, "load_s": round(load_s, 1),
         "gen_s": round(gen_s, 1), "out_tokens": n_out,
         "tok_per_s": round(n_out / max(gen_s, 1e-9), 1),
         "s_per_report": round(gen_s / max(len(recs), 1), 3),
         "mean_out_tokens": round(n_out / max(len(recs), 1), 1),
+        "max_tokens": max_tokens,
+        "max_model_len": max_model_len,
+        "max_prompt_tokens": int(n_max),
+        "budget_ok": bool(max_model_len - n_max >= max_tokens),
+        "n_capped": n_capped,
+        "n_fail_capped": n_bad_capped,
+        "n_fail": len(recs) - ok,
     }
     # Teshis DOSYAYA da yazilir: vLLM binlerce INFO satiri basiyor ve Kaggle
     # cikti limitini asinca kirpiyor — ilk kosuda "gudumlu decoding" satiri tam
@@ -272,6 +307,8 @@ def run(model_id, reports, out_path, tensor_parallel_size=1,
     print(f"  {len(recs):,} rapor / {gen_s:.0f}s  "
           f"({meta['s_per_report']:.2f} s/rapor, {meta['tok_per_s']:.0f} tok/s)")
     print(f"  ayristirma basarisi: {ok}/{len(recs)} ({meta['parse_ok_rate']:.1%})")
+    print(f"  token tavanina dayanan: {n_capped}  |  bunlardan ayristirilamayan:"
+          f" {n_bad_capped} / {len(recs)-ok}")
     est_h = meta["s_per_report"] * 4407 / 3600
     print(f"  >> 4.407 raporun tamami icin tahmin: {est_h:.2f} saat")
     return recs, meta
